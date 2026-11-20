@@ -1,0 +1,58 @@
+# TrackFlow pipeline registry.
+# Every task declares its layer and dependencies; the engine builds the DAG,
+# runs it in topological order and supports reruns from any layer.
+
+settings:
+  database: data/warehouse.db
+  raw_dir: data/raw
+  calendar: { start_date: "2023-01-01", end_date: "2025-12-31" }
+  retry: { max_attempts: 3, base_delay_s: 2 }   # 2s -> 4s -> 8s
+
+tasks:
+  # ---------- Bronze: land raw extracts as-is ----------
+  - { name: ingest_hr_employees,      layer: bronze, type: ingest, source: hr_employees.csv }
+  - { name: ingest_hr_absences,       layer: bronze, type: ingest, source: hr_absences.csv }
+  - { name: ingest_maint_work_orders, layer: bronze, type: ingest, source: maint_work_orders.csv }
+  - { name: ingest_fleet_availability, layer: bronze, type: ingest, source: fleet_availability.csv }
+
+  # ---------- Silver: typed, cleaned, de-duplicated ----------
+  - { name: silver_employees,          layer: silver, type: sql, file: sql/silver/employees.sql,          depends_on: [ingest_hr_employees] }
+  - { name: silver_absences,           layer: silver, type: sql, file: sql/silver/absences.sql,           depends_on: [ingest_hr_absences, silver_employees] }
+  - { name: silver_work_orders,        layer: silver, type: sql, file: sql/silver/work_orders.sql,        depends_on: [ingest_maint_work_orders] }
+  - { name: silver_fleet_availability, layer: silver, type: sql, file: sql/silver/fleet_availability.sql, depends_on: [ingest_fleet_availability] }
+  - name: dq_silver
+    layer: silver
+    type: quality
+    depends_on: [silver_employees, silver_absences, silver_work_orders, silver_fleet_availability]
+    checks:
+      - { table: silver_employees,          check: unique,   column: employee_id }
+      - { table: silver_employees,          check: not_null, column: hire_date }
+      - { table: silver_employees,          check: accepted_values, column: department,
+          values: [Operations, Maintenance, Customer Service, Security, Support Functions] }
+      - { table: silver_absences,           check: unique,   column: absence_id }
+      - { table: silver_absences,           check: expression, expr: "end_date >= start_date" }
+      - { table: silver_work_orders,        check: accepted_values, column: wo_type, values: [preventive, corrective] }
+      - { table: silver_fleet_availability, check: expression, expr: "vehicles_available BETWEEN 0 AND vehicles_required" }
+      - { table: silver_fleet_availability, check: min_rows, value: 1000 }
+
+  # ---------- Gold: star schemas + KPIs ----------
+  - { name: gold_dimensions, layer: gold, type: sql, file: sql/gold/dimensions.sql,  depends_on: [dq_silver] }
+  - { name: gold_facts,      layer: gold, type: sql, file: sql/gold/facts.sql,       depends_on: [gold_dimensions] }
+  - { name: gold_kpis,       layer: gold, type: sql, file: sql/gold/kpi_monthly.sql, depends_on: [gold_facts] }
+  - name: dq_gold
+    layer: gold
+    type: quality
+    depends_on: [gold_kpis]
+    checks:
+      - { table: gold_fact_absence_day,  check: relationship, column: employee_key, to: gold_dim_employee, to_column: employee_key }
+      - { table: gold_fact_work_order,   check: not_null, column: line_key }
+      - { table: gold_kpi_monthly,       check: expression, expr: "value BETWEEN 0 AND 1" }
+      - { table: gold_kpi_monthly,       check: expression, expr: "kpi <> 'fleet_availability' OR value >= 0.80", severity: warn }
+
+  # ---------- Forecast: write predictions back to Gold ----------
+  - name: forecast_kpis
+    layer: gold
+    type: python
+    callable: trackflow.forecast:run
+    depends_on: [dq_gold]
+    params: { horizon: 6, kpis: [absenteeism_rate, turnover_rate, fleet_availability] }
