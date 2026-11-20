@@ -1,0 +1,43 @@
+[project]
+name = "trackflow"
+version = "1.0.0"
+description = "Config-driven Medallion data pipeline for transit operations KPIs, with data quality checks, forecasting and a monitoring dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mohamed Amine Adnane" }]
+dependencies = [
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "scikit-learn>=1.3",
+  "PyYAML>=6.0",
+  "Jinja2>=3.1",
+  "Flask>=3.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+trackflow = "trackflow.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["trackflow"]
+
+[tool.setuptools.package-data]
+trackflow = ["templates/*.html"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["SIM108"]  # explicit if/else reads better than long ternaries
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
