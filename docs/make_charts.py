@@ -66,7 +66,10 @@ fig.tight_layout()
 out = ROOT / "docs" / "kpis.svg"
 fig.savefig(out, metadata={"Date": None})
 # trim coordinate precision to 0.1 px: same picture, far fewer bytes
-svg = re.sub(r"(\d+\.\d)\d+", r"\1", out.read_text())
+svg = re.sub(r"(\d+\.\d)\d{2,}", r"\1", out.read_text())
+svg = re.sub(r"font-family: [^;\"]+", "font-family: sans-serif", svg)
+svg = re.sub(r' transform="rotate\(-0 [^)]*\)"', "", svg)
+svg = re.sub(r"<metadata>.*?</metadata>\n?", "", svg, flags=re.S)
 svg = re.sub(r"\n\s*", "\n", svg)
 out.write_text(svg)
 print(f"wrote {out}")
